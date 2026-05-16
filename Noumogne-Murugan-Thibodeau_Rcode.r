@@ -92,13 +92,11 @@ print(sigmas)
 
 #QUESTION (b)
 
-# Boys only
+# For Boys
 boys_data <- df[df$Boy == 1, 2:14]
 Y_boys <- as.matrix(boys_data)
 
-# Mean growth function
 mu_function <- function(times, gamma) {
-  
   gamma0 <- gamma[1]
   gamma1 <- gamma[2]
   gamma2 <- gamma[3]
@@ -108,39 +106,30 @@ mu_function <- function(times, gamma) {
   beta1 <- exp(-gamma1)
   beta2 <- exp(gamma2)
   beta3 <- exp(-gamma3)
-  
   mu <- beta0 +
     beta1 * times +
     beta2 * (1 - exp(-(beta3 / beta2) * times))
-  
   return(mu)
 }
 
 # Log-posterior
 logposterior <- function(theta, Y, times) {
-  
   gamma <- theta[1:4]
   tau   <- theta[5]
-  
   if (tau <= 0) {
     return(-Inf)
   }
-  
   mu <- mu_function(times, gamma)
-  
   RSS <- sum(
     (Y - matrix(mu,
                 nrow = nrow(Y),
                 ncol = length(mu),
                 byrow = TRUE))^2
   )
-  
   n <- nrow(Y)
   m <- ncol(Y)
-  
   logpost <- (n * m / 2 - 1) * log(tau) -
     (tau / 2) * RSS
-  
   return(logpost)
 }
 
@@ -155,8 +144,6 @@ beta3_init <- 0.0370
 
 # Rough estimate from Question 2(e)
 sigma_init <- 0.25
-
-# Transformation from beta to gamma
 start <- c(
   log(beta0_init),
   -log(beta1_init),
@@ -165,7 +152,6 @@ start <- c(
   1 / sigma_init^2
 )
 
-# Negative log-posterior
 neglogpost <- function(theta) {
   return(-logposterior(theta, Y_boys, t.obs))
 }
@@ -176,10 +162,8 @@ fit <- nlm(
   p = start,
   hessian = TRUE
 )
-
 theta_hat <- fit$estimate
 H <- fit$hessian
-
 Sigma_theta <- solve(H)
 
 cat("Posterior mode:\n")
@@ -193,40 +177,28 @@ print(Sigma_theta)
 #QUESTION 4
 #==========
 
-
-
 #QUESTION (b)(i)
 
 library(MASS)
-
 set.seed(123)
-
 M <- 10000
 
-# Initial values from Question 3
+# Initial values of gamma and tau
 gamma_current <- theta_hat[1:4]
 tau_current   <- theta_hat[5]
 
 # Covariance matrix for gamma from the Laplace approximation
 Sigma_gamma <- Sigma_theta[1:4, 1:4]
 
-# Tuning parameter
-# Since the proposal is multivariate, we target an acceptance rate around 20%
-c_tune <- 1
-
-# Storage
+c_tune <- 1.5
 gamma_chain <- matrix(NA, nrow = M, ncol = 4)
 tau_chain   <- numeric(M)
-
 colnames(gamma_chain) <- c("gamma0", "gamma1", "gamma2", "gamma3")
-
 accept <- 0
 
-# Function computing S(gamma)
+# Compute S(gamma)
 compute_RSS <- function(gamma, Y, times) {
-  
   mu <- mu_function(times, gamma)
-  
   RSS <- sum(
     (Y - matrix(mu,
                 nrow = nrow(Y),
@@ -238,11 +210,7 @@ compute_RSS <- function(gamma, Y, times) {
 }
 
 for (s in 1:M) {
-  
-  # -------------------------
   # Metropolis step for gamma
-  # -------------------------
-  
   gamma_proposal <- as.numeric(
     MASS::mvrnorm(
       n = 1,
@@ -250,44 +218,35 @@ for (s in 1:M) {
       Sigma = c_tune^2 * Sigma_gamma
     )
   )
-  
   theta_current  <- c(gamma_current, tau_current)
   theta_proposal <- c(gamma_proposal, tau_current)
-  
   log_alpha <- logposterior(theta_proposal, Y_boys, t.obs) -
     logposterior(theta_current, Y_boys, t.obs)
-  
   if (log(runif(1)) < log_alpha) {
     gamma_current <- gamma_proposal
     accept <- accept + 1
   }
   
-  # -------------------------
   # Gibbs step for tau
-  # -------------------------
-  
   RSS_current <- compute_RSS(gamma_current, Y_boys, t.obs)
-  
   n <- nrow(Y_boys)
   m <- ncol(Y_boys)
-  
   shape_tau <- n * m / 2
   rate_tau  <- RSS_current / 2
-  
   tau_current <- rgamma(1, shape = shape_tau, rate = rate_tau)
-  
-  # Store values
+
   gamma_chain[s, ] <- gamma_current
   tau_chain[s] <- tau_current
 }
 
 acceptance_rate <- accept / M
-acceptance_rate
+acceptance_rate   # = 0.3674 pour un ctune de 1, 0.2548 pour c_tune de 1.3, 0.2126 pour c_tune de 1.5, 0.1903 pour c_tune de 1.6
 
 
 #QUESTION (b)(ii)
+par(mfrow = c(2,2))
 
-par(mfrow = c(3, 2))
+#par(mfrow = c(3, 2))
 
 plot(gamma_chain[, 1], type = "l",
      main = "Traceplot gamma0", ylab = "gamma0")
@@ -305,7 +264,7 @@ plot(tau_chain, type = "l",
      main = "Traceplot tau", ylab = "tau")
 
 
-par(mfrow = c(3, 2))
+par(mfrow = c(2, 2))
 
 acf(gamma_chain[, 1], main = "ACF gamma0")
 acf(gamma_chain[, 2], main = "ACF gamma1")
