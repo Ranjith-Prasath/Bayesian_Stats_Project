@@ -316,6 +316,219 @@ results <- rbind(
 
 results
 
+# QUESTION 5
+
+# Setup data matrices and sample sizes specifically for boys
+N_boys <- nrow(Y_boys)
+M_times <- length(t.obs)
+
+jags_data_q5 <- list(
+  Y = Y_boys, 
+  t = t.obs, 
+  N = N_boys, 
+  M = M_times
+)
+
+jags_model_q5_string <- "
+model {
+  for (i in 1:N) {
+    for (j in 1:M) {
+      mu[i,j] <- beta0 + beta1 * t[j] + beta2 * (1 - exp(-(beta3 / beta2) * t[j]))
+      Y[i,j] ~ dnorm(mu[i,j], tau)
+    }
+  }
+  
+  beta0 ~ dnorm(0, 1.0E-6) T(0, )
+  beta1 ~ dnorm(0, 1.0E-6) T(0, )
+  beta2 ~ dnorm(0, 1.0E-6) T(0, )
+  beta3 ~ dnorm(0, 1.0E-6) T(0, )
+  tau   ~ dgamma(0.001, 0.001)
+  sigma <- 1 / sqrt(tau)
+}
+"
+
+# Set initial parameter values across three distinct chains using Q3 optimization outputs
+inits_q5 <- list(
+  list(beta0 = 2.96, beta1 = 0.00550, beta2 = 5.29, beta3 = 0.0374, tau = 9.72),
+  list(beta0 = 2.90, beta1 = 0.00500, beta2 = 5.10, beta3 = 0.0360, tau = 9.00),
+  list(beta0 = 3.02, beta1 = 0.00600, beta2 = 5.50, beta3 = 0.0390, tau = 10.50)
+)
+
+set.seed(123)
+model_q5 <- jags.model(textConnection(jags_model_q5_string), data = jags_data_q5, inits = inits_q5, n.chains = 3, n.adapt = 1000)
+update(model_q5, 2000)
+
+params_q5 <- c("beta0", "beta1", "beta2", "beta3", "sigma")
+samples_q5 <- coda.samples(model_q5, variable.names = params_q5, n.iter = 10000)
+
+cat("\n--- Q5(a): Summary Results ---\n")
+print(summary(samples_q5))
+print(gelman.diag(samples_q5))
+print(effectiveSize(samples_q5))
+
+png("q5a_traceplots.png", width = 900, height = 600)
+par(mfrow = c(3, 2), mar = c(2, 2, 2, 1))
+for (p in params_q5) { 
+  traceplot(samples_q5[, p], main = paste("Traceplot", p)) 
+}
+dev.off()
+
+
+# Q5(b) - Compare analytical M-W-G posterior with JAGS output
+q4_mean  <- c(beta0=2.958,   beta1=0.00553, beta2=5.287,  beta3=0.0374,  sigma=0.321)
+q4_lower <- c(beta0=2.925,   beta1=0.00530, beta2=5.131,  beta3=0.0365,  sigma=0.310)
+q4_upper <- c(beta0=2.992,   beta1=0.00575, beta2=5.455,  beta3=0.0384,  sigma=0.332)
+
+q5_stats  <- summary(samples_q5)$statistics
+q5_quant  <- summary(samples_q5)$quantiles
+
+cat("\n--- Q5(b): Comparing Custom M-W-G vs JAGS Sampler Calculations ---\n")
+cat(sprintf("%-8s  %9s  %20s    %9s  %20s\n", "Param", "Q4 Mean", "Q4 95% CI", "Q5 Mean", "Q5 95% CI"))
+for (p in params_q5) {
+  cat(sprintf("%-8s  %9.5f  [%8.5f, %8.5f]    %9.5f  [%8.5f, %8.5f]\n",
+              p, q4_mean[p], q4_lower[p], q4_upper[p], q5_stats[p, "Mean"], q5_quant[p, "2.5%"], q5_quant[p, "97.5%"]))
+}
+
+
+# Q5(c) - Out of sample weight simulation at t = 90
+chains_q5 <- as.matrix(samples_q5)
+n_sims    <- nrow(chains_q5)
+t_pred    <- 90
+y_pred_q5 <- numeric(n_sims)
+
+for (s in 1:n_sims) {
+  mu_90        <- chains_q5[s, "beta0"] + chains_q5[s, "beta1"] * t_pred + chains_q5[s, "beta2"] * (1 - exp(-(chains_q5[s, "beta3"] / chains_q5[s, "beta2"]) * t_pred))
+  y_pred_q5[s] <- rnorm(1, mean = mu_90, sd = chains_q5[s, "sigma"])
+}
+
+cat("\n--- Q5(c): Fixed Model Predictions at Day 90 ---\n")
+print(quantile(y_pred_q5, probs = c(0.025, 0.5, 0.975)))
+
+png("q5c_histogram.png", width = 800, height = 500)
+hist(y_pred_q5, breaks = 60, col = "steelblue", border = "white", prob = TRUE, main = "Q5c: Prediction Profile (Boys Model Only)", xlab = "Weight (kg)")
+lines(density(y_pred_q5), col = "black", lwd = 2)
+abline(v = quantile(y_pred_q5, c(0.025, 0.975)), col = "red", lwd = 2, lty = 2)
+dev.off()
+
+
+
+
+# QUESTION 6
+
+
+# Fit alternative full-population multi-level model formulation
+Y_all <- as.matrix(df[, 2:14])
+boy   <- df$Boy
+N_all <- nrow(Y_all)
+
+jags_data_q6 <- list(
+  Y = Y_all, 
+  t = t.obs, 
+  boy = boy, 
+  N = N_all, 
+  M = M_times
+)
+
+jags_model_q6_string <- "
+model {
+  for (i in 1:N) {
+    beta0i[i] ~ dnorm(beta0, tau0)
+    
+    b0_eff[i] <- beta0i[i] + delta0 * boy[i]
+    b1_eff[i] <- beta1     + delta1 * boy[i]
+    b2_eff[i] <- beta2     + delta2 * boy[i]
+    b3_eff[i] <- beta3     + delta3 * boy[i]
+
+    for (j in 1:M) {
+      mu[i,j] <- b0_eff[i] + b1_eff[i] * t[j] + b2_eff[i] * (1 - exp(-(b3_eff[i] / b2_eff[i]) * t[j]))
+      Y[i,j] ~ dnorm(mu[i,j], tau)
+    }
+  }
+  
+  beta0 ~ dnorm(0, 1.0E-6) T(0, )
+  beta1 ~ dnorm(0, 1.0E-6) T(0, )
+  beta2 ~ dnorm(0, 1.0E-6) T(0, )
+  beta3 ~ dnorm(0, 1.0E-6) T(0, )
+  
+  delta0 ~ dnorm(0, 1.0E-6)
+  delta1 ~ dnorm(0, 1.0E-6)
+  delta2 ~ dnorm(0, 1.0E-6) T(-beta2, )
+  delta3 ~ dnorm(0, 1.0E-6) T(-beta3, )
+  
+  tau    ~ dgamma(0.001, 0.001)
+  tau0   ~ dgamma(0.001, 0.001)
+  sigma  <- 1 / sqrt(tau)
+  sigma0 <- 1 / sqrt(tau0)
+}
+"
+
+inits_q6 <- list(
+  list(beta0=2.84, beta1=0.00590, beta2=4.31, beta3=0.03330, delta0=0.11, delta1=0.0, delta2=0.97, delta3=0.004, tau=10.0, tau0=17.0),
+  list(beta0=2.80, beta1=0.00550, beta2=4.10, beta3=0.03200, delta0=0.09, delta1=0.0, delta2=0.85, delta3=0.003, tau=9.5,  tau0=15.0),
+  list(beta0=2.90, beta1=0.00630, beta2=4.50, beta3=0.03450, delta0=0.13, delta1=0.0, delta2=1.10, delta3=0.005, tau=10.5, tau0=19.0)
+)
+
+set.seed(123)
+model_q6 <- jags.model(textConnection(jags_model_q6_string), data = jags_data_q6, inits = inits_q6, n.chains = 3, n.adapt = 2000)
+update(model_q6, 5000)
+
+params_q6 <- c("beta0", "beta1", "beta2", "beta3", "delta0", "delta1", "delta2", "delta3", "sigma", "sigma0")
+samples_q6 <- coda.samples(model_q6, variable.names = params_q6, n.iter = 20000)
+
+cat("\n--- Q6: Mixed-Effects Performance Evaluation ---\n")
+print(summary(samples_q6))
+print(gelman.diag(samples_q6))
+print(effectiveSize(samples_q6))
+
+png("q6_traceplots.png", width = 1200, height = 1200)
+par(mfrow = c(5, 2))
+for (p in params_q6) { 
+  traceplot(samples_q6[, p], main = paste("Traceplot", p)) 
+}
+dev.off()
+
+
+# Q6(d) - Population profile projection vs subject level intercept uncertainty
+chains_q6 <- as.matrix(samples_q6)
+n_sims_q6 <- nrow(chains_q6)
+y_pred_q6 <- numeric(n_sims_q6)
+
+for (s in 1:n_sims_q6) {
+  b0   <- chains_q6[s, "beta0"]
+  b1   <- chains_q6[s, "beta1"] + chains_q6[s, "delta1"]
+  b2   <- chains_q6[s, "beta2"] + chains_q6[s, "delta2"]
+  b3   <- chains_q6[s, "beta3"] + chains_q6[s, "delta3"]
+  d0   <- chains_q6[s, "delta0"]
+  sig  <- chains_q6[s, "sigma"]
+  sig0 <- chains_q6[s, "sigma0"]
+  
+  # Account for individual variations by including random intercept noise
+  beta0i        <- rnorm(1, mean = b0 + d0, sd = sig0)
+  mu_90         <- beta0i + b1 * t_pred + b2 * (1 - exp(-(b3 / b2) * t_pred))
+  y_pred_q6[s]  <- rnorm(1, mean = mu_90, sd = sig)
+}
+
+cat("\n--- Q6(d): Day 90 Prediction with Individual Variation Included ---\n")
+print(quantile(y_pred_q6, probs = c(0.025, 0.5, 0.975)))
+cat("Interval Width Q6d:", diff(quantile(y_pred_q6, c(0.025, 0.975))), "\n")
+cat("Interval Width Q5c:", diff(quantile(y_pred_q5, c(0.025, 0.975))), "\n")
+
+png("q6d_histogram.png", width = 800, height = 500)
+hist(y_pred_q6, breaks = 60, col = "steelblue", border = "white", prob = TRUE, main = "Q6d: Predictive Density (Random Boy Model)", xlab = "Weight (kg)")
+lines(density(y_pred_q6), col = "black", lwd = 2)
+abline(v = quantile(y_pred_q6, c(0.025, 0.975)), col = "red", lwd = 2, lty = 2)
+dev.off()
+
+# Final comparative layout generation
+png("q5c_q6d_comparison.png", width = 900, height = 500)
+dens_q5 <- density(y_pred_q5)
+dens_q6 <- density(y_pred_q6)
+plot(dens_q6, col = "darkorange", lwd = 2, main = "Day 90 Posterior Density Shift: Q5c vs Q6d", xlab = "Weight (kg)", xlim = c(4.5, 7.5), ylim = c(0, max(dens_q5$y, dens_q6$y) * 1.1))
+lines(dens_q5, col = "steelblue", lwd = 2)
+abline(v = quantile(y_pred_q5, c(0.025, 0.975)), col = "steelblue", lty = 2, lwd = 1.5)
+abline(v = quantile(y_pred_q6, c(0.025, 0.975)), col = "darkorange", lty = 2, lwd = 1.5)
+legend("topright", legend = c("Q5c Fixed-Effects Profile", "Q6d Mixed-Effects Profile"), col = c("steelblue", "darkorange"), lwd = 2, bty = "n")
+dev.off()
 
 
 
